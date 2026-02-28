@@ -22,6 +22,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import androidx.camera.core.ImageAnalysis;
+import com.google.mediapipe.tasks.components.containers.Category;
+import com.google.mediapipe.tasks.components.containers.Detection;
+import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetectorResult;
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult;
 
 public class MainActivity extends AppCompatActivity {
@@ -33,7 +36,15 @@ public class MainActivity extends AppCompatActivity {
     private OverlayView overlayView;
     private ExecutorService cameraExecutor;
     private PoseLandmarkerHelper poseLandmarkerHelper;
+    private ObjectDetectorHelper objectDetectorHelper;
     private android.widget.TextView actionStatusText;
+
+    // Multi-modal state
+    private PoseLandmarkerResult lastPoseResult;
+    private ObjectDetectorResult lastObjectResult;
+
+    // Frame Alternation Counter
+    private int frameCounter = 0;
 
     // Smoothing list to prevent rapid flickering of status
     private final java.util.LinkedList<String> recentStatuses = new java.util.LinkedList<>();
@@ -60,56 +71,88 @@ public class MainActivity extends AppCompatActivity {
         poseLandmarkerHelper = new PoseLandmarkerHelper(this, new PoseLandmarkerHelper.PoseLandmarkerListener() {
             @Override
             public void onError(String error) {
-                Log.e(TAG, "MediaPipe Error: " + error);
+                Log.e(TAG, "MediaPipe Pose Error: " + error);
             }
 
             @Override
             public void onResults(PoseLandmarkerResult result, long inferenceTime) {
-                if (result.landmarks().isEmpty()) {
-                    overlayView.post(() -> overlayView.setResults(null, 1, 1));
-                    updateStatusText("未检测到人体");
-                    return;
-                }
+                lastPoseResult = result;
+                processMultiModalData();
+            }
+        });
 
-                // Get the coordinates
-                java.util.List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark> landmarks = result
-                        .landmarks().get(0);
+        objectDetectorHelper = new ObjectDetectorHelper(this, new ObjectDetectorHelper.DetectorListener() {
+            @Override
+            public void onError(String error) {
+                Log.e(TAG, "MediaPipe Object Error: " + error);
+            }
 
-                String currentStatus = analyzeAction(landmarks);
-
-                // Pass results to OverlayView for drawing
-                overlayView.post(() -> {
-                    overlayView.setResults(result, viewFinder.getHeight(), viewFinder.getWidth());
-                });
-
-                updateStatusText(currentStatus);
+            @Override
+            public void onResults(ObjectDetectorResult results, long inferenceTime) {
+                lastObjectResult = results;
+                processMultiModalData();
             }
         });
     }
 
+    private void processMultiModalData() {
+        if (lastPoseResult == null || lastPoseResult.landmarks().isEmpty()) {
+            overlayView.post(() -> overlayView.setResults(null, 1, 1));
+            updateStatusText("未检测到人体");
+            return;
+        }
+
+        java.util.List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark> landmarks = lastPoseResult
+                .landmarks().get(0);
+
+        // Pass results to OverlayView for drawing
+        overlayView.post(() -> {
+            overlayView.setResults(lastPoseResult, viewFinder.getHeight(), viewFinder.getWidth());
+        });
+
+        String currentStatus = analyzeAction(landmarks, lastObjectResult);
+        updateStatusText(currentStatus);
+    }
+
     private String analyzeAction(
-            java.util.List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark> landmarks) {
-        if (landmarks.size() < 17)
+            java.util.List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark> poseLandmarks,
+            ObjectDetectorResult objectResult) {
+
+        if (poseLandmarks.size() < 17)
             return "分析中...";
 
-        com.google.mediapipe.tasks.components.containers.NormalizedLandmark leftShoulder = landmarks.get(11);
-        com.google.mediapipe.tasks.components.containers.NormalizedLandmark rightShoulder = landmarks.get(12);
-        com.google.mediapipe.tasks.components.containers.NormalizedLandmark leftWrist = landmarks.get(15);
-        com.google.mediapipe.tasks.components.containers.NormalizedLandmark rightWrist = landmarks.get(16);
+        com.google.mediapipe.tasks.components.containers.NormalizedLandmark leftShoulder = poseLandmarks.get(11);
+        com.google.mediapipe.tasks.components.containers.NormalizedLandmark rightShoulder = poseLandmarks.get(12);
+        com.google.mediapipe.tasks.components.containers.NormalizedLandmark leftWrist = poseLandmarks.get(15);
+        com.google.mediapipe.tasks.components.containers.NormalizedLandmark rightWrist = poseLandmarks.get(16);
 
         float shoulderAvgY = (leftShoulder.y() + rightShoulder.y()) / 2f;
         float wristAvgY = (leftWrist.y() + rightWrist.y()) / 2f;
 
-        // Y coordinates: 0 is top, 1 is bottom. Smaller diff means hands are higher
-        // relative to shoulders.
         float handsToShoulderDiff = wristAvgY - shoulderAvgY;
-
-        // X coordinates: 0 is left, 1 is right.
         float handsDistanceX = Math.abs(leftWrist.x() - rightWrist.x());
 
-        // Rules for classification
-        if (handsToShoulderDiff < 0.25f && handsDistanceX < 0.4f) {
-            return "📱 正在玩手机";
+        boolean isHandsUp = handsToShoulderDiff < 0.25f;
+        boolean isHandsClose = handsDistanceX < 0.4f;
+
+        // Fused Logic: Is there a cell phone in the frame?
+        boolean seePhone = false;
+        if (objectResult != null) {
+            for (Detection detection : objectResult.detections()) {
+                for (Category category : detection.categories()) {
+                    if (category.categoryName().equals("cell phone") && category.score() > 0.4f) {
+                        seePhone = true;
+                    }
+                }
+            }
+        }
+
+        if (isHandsUp && seePhone) {
+            return "📱 抓到啦！正在玩手机！";
+        }
+
+        if (isHandsUp && isHandsClose) {
+            return "📱 疑似在玩手机/手持物";
         } else if (handsToShoulderDiff > 0.45f) {
             return "✍️ 努力写字中...";
         }
@@ -117,7 +160,7 @@ public class MainActivity extends AppCompatActivity {
         return "🤔 正常姿态 / 未知动作";
     }
 
-    private void updateStatusText(String newStatus) {
+    private synchronized void updateStatusText(String newStatus) {
         recentStatuses.add(newStatus);
         if (recentStatuses.size() > SMOOTHING_WINDOW_SIZE) {
             recentStatuses.poll();
@@ -175,10 +218,19 @@ public class MainActivity extends AppCompatActivity {
                         .build();
 
                 imageAnalysis.setAnalyzer(cameraExecutor, image -> {
-                    if (poseLandmarkerHelper != null) {
-                        poseLandmarkerHelper.detectLiveStream(image, isFrontCamera);
+                    frameCounter++;
+                    if (frameCounter % 2 == 0) {
+                        if (poseLandmarkerHelper != null) {
+                            poseLandmarkerHelper.detectLiveStream(image, isFrontCamera);
+                        } else {
+                            image.close();
+                        }
                     } else {
-                        image.close();
+                        if (objectDetectorHelper != null) {
+                            objectDetectorHelper.detectLiveStream(image, isFrontCamera);
+                        } else {
+                            image.close();
+                        }
                     }
                 });
 
@@ -219,6 +271,9 @@ public class MainActivity extends AppCompatActivity {
         super.onDestroy();
         if (poseLandmarkerHelper != null) {
             poseLandmarkerHelper.close();
+        }
+        if (objectDetectorHelper != null) {
+            objectDetectorHelper.close();
         }
         cameraExecutor.shutdown();
     }
