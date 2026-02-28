@@ -28,7 +28,7 @@ public class ObjectDetectorHelper {
     public interface DetectorListener {
         void onError(String error);
 
-        void onResults(ObjectDetectorResult results, long inferenceTime);
+        void onResults(ObjectDetectorResult results, long inferenceTime, int imageHeight, int imageWidth);
     }
 
     public ObjectDetectorHelper(Context context, DetectorListener listener) {
@@ -47,7 +47,7 @@ public class ObjectDetectorHelper {
                     .setBaseOptions(baseOptions)
                     .setRunningMode(RunningMode.LIVE_STREAM)
                     .setMaxResults(5) // Don't need to find too many things
-                    .setScoreThreshold(0.4f) // Only care about confident detections
+                    .setScoreThreshold(0.6f) // Only care about confident detections
                     .setResultListener(this::returnLivestreamResult)
                     .setErrorListener(this::returnLivestreamError)
                     .build();
@@ -93,7 +93,7 @@ public class ObjectDetectorHelper {
         long inferenceTime = finishTimeMs - result.timestampMs();
 
         if (listener != null) {
-            listener.onResults(result, inferenceTime);
+            listener.onResults(result, inferenceTime, inputImage.getHeight(), inputImage.getWidth());
         }
     }
 

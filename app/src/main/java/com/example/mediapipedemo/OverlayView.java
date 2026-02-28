@@ -10,15 +10,25 @@ import android.view.View;
 import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
 
+import androidx.annotation.Nullable;
+import androidx.core.content.ContextCompat;
+
+import com.google.mediapipe.tasks.components.containers.Category;
+import com.google.mediapipe.tasks.components.containers.Detection;
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark;
+import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetectorResult;
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult;
 
 import java.util.List;
 
 public class OverlayView extends View {
-    private PoseLandmarkerResult results;
+    private PoseLandmarkerResult poseResults;
+    private ObjectDetectorResult objectResults;
+
     private Paint pointPaint;
     private Paint linePaint;
+    private Paint boxPaint;
+    private Paint textPaint;
 
     private float scaleFactor = 1f;
     private int imageWidth = 1;
@@ -46,10 +56,22 @@ public class OverlayView extends View {
         pointPaint.setColor(Color.RED);
         pointPaint.setStrokeWidth(12f);
         pointPaint.setStyle(Paint.Style.FILL);
+
+        boxPaint = new Paint();
+        boxPaint.setColor(Color.RED);
+        boxPaint.setStrokeWidth(8f);
+        boxPaint.setStyle(Paint.Style.STROKE);
+
+        textPaint = new Paint();
+        textPaint.setColor(Color.RED);
+        textPaint.setTextSize(50f);
+        textPaint.setStyle(Paint.Style.FILL);
     }
 
-    public void setResults(PoseLandmarkerResult poseLandmarkerResults, int imageHeight, int imageWidth) {
-        this.results = poseLandmarkerResults;
+    public void setResults(PoseLandmarkerResult poseResults, ObjectDetectorResult objectResults, int imageHeight,
+            int imageWidth) {
+        this.poseResults = poseResults;
+        this.objectResults = objectResults;
         this.imageHeight = imageHeight;
         this.imageWidth = imageWidth;
         invalidate(); // Trigger a redraw
@@ -59,10 +81,6 @@ public class OverlayView extends View {
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
 
-        if (results == null || results.landmarks().isEmpty()) {
-            return;
-        }
-
         // Calculate scaling assuming preview behavior is ScaleType.FILL_CENTER
         scaleFactor = Math.max(getWidth() * 1f / imageWidth, getHeight() * 1f / imageHeight);
 
@@ -70,28 +88,52 @@ public class OverlayView extends View {
         float startX = (getWidth() - imageWidth * scaleFactor) / 2f;
         float startY = (getHeight() - imageHeight * scaleFactor) / 2f;
 
-        List<NormalizedLandmark> landmarks = results.landmarks().get(0);
+        // Draw Object Bounding Boxes
+        if (objectResults != null) {
+            for (Detection detection : objectResults.detections()) {
+                android.graphics.RectF boundingBox = detection.boundingBox();
 
-        // Draw connections (bones)
-        for (int[] connection : POSE_LANDMARKS_CONNECTIONS) {
-            NormalizedLandmark startLandmark = landmarks.get(connection[0]);
-            NormalizedLandmark endLandmark = landmarks.get(connection[1]);
+                float left = boundingBox.left * scaleFactor + startX;
+                float top = boundingBox.top * scaleFactor + startY;
+                float right = boundingBox.right * scaleFactor + startX;
+                float bottom = boundingBox.bottom * scaleFactor + startY;
 
-            canvas.drawLine(
-                    startLandmark.x() * imageWidth * scaleFactor + startX,
-                    startLandmark.y() * imageHeight * scaleFactor + startY,
-                    endLandmark.x() * imageWidth * scaleFactor + startX,
-                    endLandmark.y() * imageHeight * scaleFactor + startY,
-                    linePaint);
+                canvas.drawRect(left, top, right, bottom, boxPaint);
+
+                // Draw label
+                if (!detection.categories().isEmpty()) {
+                    Category category = detection.categories().get(0);
+                    String labelString = category.categoryName() + " " + Math.round(category.score() * 100) + "%";
+                    canvas.drawText(labelString, left, top - 20, textPaint);
+                }
+            }
         }
 
-        // Draw points (joints)
-        for (NormalizedLandmark landmark : landmarks) {
-            canvas.drawCircle(
-                    landmark.x() * imageWidth * scaleFactor + startX,
-                    landmark.y() * imageHeight * scaleFactor + startY,
-                    8f,
-                    pointPaint);
+        // Draw Pose Skeleton
+        if (poseResults != null && !poseResults.landmarks().isEmpty()) {
+            List<NormalizedLandmark> landmarks = poseResults.landmarks().get(0);
+
+            // Draw connections (bones)
+            for (int[] connection : POSE_LANDMARKS_CONNECTIONS) {
+                NormalizedLandmark startLandmark = landmarks.get(connection[0]);
+                NormalizedLandmark endLandmark = landmarks.get(connection[1]);
+
+                canvas.drawLine(
+                        startLandmark.x() * imageWidth * scaleFactor + startX,
+                        startLandmark.y() * imageHeight * scaleFactor + startY,
+                        endLandmark.x() * imageWidth * scaleFactor + startX,
+                        endLandmark.y() * imageHeight * scaleFactor + startY,
+                        linePaint);
+            }
+
+            // Draw points (joints)
+            for (NormalizedLandmark landmark : landmarks) {
+                canvas.drawCircle(
+                        landmark.x() * imageWidth * scaleFactor + startX,
+                        landmark.y() * imageHeight * scaleFactor + startY,
+                        8f,
+                        pointPaint);
+            }
         }
     }
 }

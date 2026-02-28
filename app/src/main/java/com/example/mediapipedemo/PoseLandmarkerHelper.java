@@ -27,7 +27,7 @@ public class PoseLandmarkerHelper {
     public interface PoseLandmarkerListener {
         void onError(String error);
 
-        void onResults(PoseLandmarkerResult result, long inferenceTime);
+        void onResults(PoseLandmarkerResult result, long inferenceTime, int imageHeight, int imageWidth);
     }
 
     public PoseLandmarkerHelper(Context context, PoseLandmarkerListener listener) {
@@ -90,7 +90,7 @@ public class PoseLandmarkerHelper {
         long inferenceTime = finishTimeMs - result.timestampMs();
 
         if (listener != null) {
-            listener.onResults(result, inferenceTime);
+            listener.onResults(result, inferenceTime, inputImage.getHeight(), inputImage.getWidth());
         }
     }
 

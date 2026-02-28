@@ -43,6 +43,9 @@ public class MainActivity extends AppCompatActivity {
     private PoseLandmarkerResult lastPoseResult;
     private ObjectDetectorResult lastObjectResult;
 
+    private int frameImageWidth = 1;
+    private int frameImageHeight = 1;
+
     // Frame Alternation Counter
     private int frameCounter = 0;
 
@@ -75,8 +78,10 @@ public class MainActivity extends AppCompatActivity {
             }
 
             @Override
-            public void onResults(PoseLandmarkerResult result, long inferenceTime) {
+            public void onResults(PoseLandmarkerResult result, long inferenceTime, int imageHeight, int imageWidth) {
                 lastPoseResult = result;
+                frameImageHeight = imageHeight;
+                frameImageWidth = imageWidth;
                 processMultiModalData();
             }
         });
@@ -88,27 +93,28 @@ public class MainActivity extends AppCompatActivity {
             }
 
             @Override
-            public void onResults(ObjectDetectorResult results, long inferenceTime) {
+            public void onResults(ObjectDetectorResult results, long inferenceTime, int imageHeight, int imageWidth) {
                 lastObjectResult = results;
+                frameImageHeight = imageHeight;
+                frameImageWidth = imageWidth;
                 processMultiModalData();
             }
         });
     }
 
     private void processMultiModalData() {
+        // Pass results to OverlayView for drawing
+        overlayView.post(() -> {
+            overlayView.setResults(lastPoseResult, lastObjectResult, frameImageHeight, frameImageWidth);
+        });
+
         if (lastPoseResult == null || lastPoseResult.landmarks().isEmpty()) {
-            overlayView.post(() -> overlayView.setResults(null, 1, 1));
             updateStatusText("未检测到人体");
             return;
         }
 
         java.util.List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark> landmarks = lastPoseResult
                 .landmarks().get(0);
-
-        // Pass results to OverlayView for drawing
-        overlayView.post(() -> {
-            overlayView.setResults(lastPoseResult, viewFinder.getHeight(), viewFinder.getWidth());
-        });
 
         String currentStatus = analyzeAction(landmarks, lastObjectResult);
         updateStatusText(currentStatus);
@@ -135,23 +141,67 @@ public class MainActivity extends AppCompatActivity {
         boolean isHandsUp = handsToShoulderDiff < 0.25f;
         boolean isHandsClose = handsDistanceX < 0.4f;
 
-        // Fused Logic: Is there a cell phone in the frame?
-        boolean seePhone = false;
+        // Fused Logic: Is there any object near the hands? Is it a cell phone?
+        boolean phoneInHand = false;
+        boolean anyObjectInHand = false;
+
         if (objectResult != null) {
             for (Detection detection : objectResult.detections()) {
-                for (Category category : detection.categories()) {
-                    if (category.categoryName().equals("cell phone") && category.score() > 0.4f) {
-                        seePhone = true;
+                boolean isNearHands = false;
+                android.graphics.RectF rect = detection.boundingBox();
+
+                int currentWidth = frameImageWidth;
+                int currentHeight = frameImageHeight;
+
+                if (currentWidth > 0 && currentHeight > 0) {
+                    float leftWristX = leftWrist.x() * currentWidth;
+                    float leftWristY = leftWrist.y() * currentHeight;
+                    float rightWristX = rightWrist.x() * currentWidth;
+                    float rightWristY = rightWrist.y() * currentHeight;
+
+                    // Reduce padding to 50 pixels to be strict. (150px was too large and could
+                    // intersect with background objects)
+                    float padding = 50f;
+                    android.graphics.RectF expandedRect = new android.graphics.RectF(
+                            rect.left - padding,
+                            rect.top - padding,
+                            rect.right + padding,
+                            rect.bottom + padding);
+
+                    // Does the left or right wrist fall inside the expanded bounding box?
+                    if (expandedRect.contains(leftWristX, leftWristY)
+                            || expandedRect.contains(rightWristX, rightWristY)) {
+                        isNearHands = true;
+                    }
+                }
+
+                if (isNearHands) {
+                    for (Category category : detection.categories()) {
+                        // Ignore the person class. The user themselves is a person,
+                        // and their hands naturally intersect with their person bounding box!
+                        if (category.categoryName().equals("person")) {
+                            continue;
+                        }
+
+                        // For generic "any object in hand", we need a decently high confidence (e.g., >
+                        // 0.55f)
+                        if (category.score() > 0.55f) {
+                            anyObjectInHand = true;
+                        }
+
+                        if (category.categoryName().equals("cell phone") && category.score() > 0.6f) {
+                            phoneInHand = true;
+                        }
                     }
                 }
             }
         }
 
-        if (isHandsUp && seePhone) {
+        if (phoneInHand) {
             return "📱 抓到啦！正在玩手机！";
         }
 
-        if (isHandsUp && isHandsClose) {
+        if (anyObjectInHand) {
             return "📱 疑似在玩手机/手持物";
         } else if (handsToShoulderDiff > 0.45f) {
             return "✍️ 努力写字中...";
